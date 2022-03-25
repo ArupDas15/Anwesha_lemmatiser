@@ -14,24 +14,24 @@ import numpy as np
 import nltk
 import indicnlp
 nltk.download('stopwords')
-from nltk.corpus import stopwords as eng_stopwords
+from nltk.corpus import stopwords as eng_stopwords #improting stopwords
 
 from indicnlp.normalize.indic_normalize import IndicNormalizerFactory
-from bnlp import NLTKTokenizer
+from bnlp import NLTKTokenizer #For Tokenization
 from bnlp import POS
 from itertools import chain
 import pyiwn
 
-
+#import editdistance
 import random
 
-from indictrans import Transliterator
+from indictrans import Transliterator #For Transliteration
 import time
 
 warnings.filterwarnings("ignore")
 trn = Transliterator(source='ben', target='eng', build_lookup=True)
 docCnt = 0
-with open('file_names.pkl', 'rb') as f:
+with open('file_names.pkl', 'rb') as f: #Creating a map for
     Lemmatized = pickle.load(f)
 # Download the IndoWordnet synset data
 pyiwn.download()
@@ -43,14 +43,15 @@ bangla_words = iwn.all_words()
 # Read Noun suffix list.
 data_path = 'suffix.txt'
 with open(data_path, 'r', encoding='utf-8') as f:
-    test_list = f.read().split('\n')
+    suffix_list = f.read().split('\n')
 
 # Read Root word expansion.
 data_path = 'words.txt'
 with open(data_path, 'r', encoding='utf-8') as f:
-    lines = f.read().split('\n')
+    root_words = f.read().split('\n')
 
-myDict1={}
+Word_root_map={}
+reverse_lem={}
 # Punctuation Removal Function
 def remove_punc(string):
     punc = '''!()-[]{};|:'"\,<>./?@#$%^&*_~'''
@@ -59,22 +60,36 @@ def remove_punc(string):
             string = string.replace(ele, "")
     return string
 
+def levenshteinDistance(s1, s2):
+    if len(s1) > len(s2):
+        s1, s2 = s2, s1
+
+    distances = range(len(s1) + 1)
+    for i2, c2 in enumerate(s2):
+        distances_ = [i2+1]
+        for i1, c1 in enumerate(s1):
+            if c1 == c2:
+                distances_.append(distances[i1])
+            else:
+                distances_.append(1 + min((distances[i1], distances[i1 + 1], distances_[-1])))
+        distances = distances_
+    return distances[-1]
 
 # Verbal Look up Table.
 data_path = 'verbal inflections.txt'
 with open(data_path, 'r', encoding='utf-8') as f:
-    test_list2 = f.read().split('\n')
+    verbal_inflections = f.read().split('\n')
 
-lis = [remove_punc(i) for i in test_list2]
-inflected = []
+lis = [remove_punc(i) for i in verbal_inflections]
+inflected_verbal = []
 verb = []
 n = len(lis)
 for i in range(0, n):
     temp = lis[i].split()
-    inflected.append(temp[0])
+    inflected_verbal.append(temp[0])
     verb.append(temp[1])
 eng=[]
-for ben in lines:
+for ben in root_words:
   temp=[]
   temp.append(ben)
   temp.append(trn.transform(ben))
@@ -107,7 +122,7 @@ def getcandidates(word):
   input = word
   input_eng = trn.transform(input)
   words=list(input_eng)
-  bi_grams=nltk.ngrams(words,2)
+  bi_grams=nltk.ngrams(words,3)
 #fun(bi_grams,word)
   candidate_list=[]
   for gram in bi_grams:
@@ -139,7 +154,7 @@ def rchop(s, suffix):
 
 # Root word expansion.
 for ben in bangla_words:
-    lines.append(ben)
+    root_words.append(ben)
 
 
 class document_linearization:
@@ -191,12 +206,15 @@ class document_linearization:
         terms = clean_text.split(' ')
         # Remove stop words
         filtered_sentence = []
-        for w in terms:
-            if w not in stop_words:
-                temp1 = self.lem(w)
-                filtered_sentence.append(temp1)
-                if w not in myDict.keys():
-                    myDict1[w]=temp1
+        for word in terms:
+            if word not in stop_words:
+                Lemmatized_word = self.lem(word)
+                filtered_sentence.append(Lemmatized_word)
+                if word not in myDict.keys():
+                    Word_root_map[word]=Lemmatized_word
+                if Lemmatized_word not in reverse_lem.keys():
+                    reverse_lem[Lemmatized_word]=set()
+                reverse_lem[Lemmatized_word].add(word)
         terms = filtered_sentence
         docCnt = docCnt + 1
         print("No. of documents processed: ", docCnt)
@@ -204,11 +222,11 @@ class document_linearization:
 
     # Lemmatization function : Input : single word Output: Single word
     def lem(self, word):
-        words = lines
-        A = []
-        i = 0
-        query = word
-        bn_pos = POS()
+        words = root_words #Storing the list of root_words into words
+        candidate_keys = [] #A 2D list to store the possible candidate keys from root word corpus and their corresponding transliterated versions
+        i = 0 #An iterator
+        query = word #The input word
+        bn_pos = POS() #stroing the model
         model_path = "models/bn_pos.pkl"
         bnltk = NLTKTokenizer()
         # Stores the list of sentence_tokens.
@@ -222,40 +240,40 @@ class document_linearization:
                 if w == word:
                     return word
             if tags[0][1] == 'NP':  # Checking for proper noun.
-                for suff in test_list[:]:
+                for suff in suffix_list[:]: #if words are ending with the suffix then simply remove
                     if word.endswith(suff):
                         word = rchop(word, suff)
             # return word
             if tags[0][1] == 'NC' or tags[0][1] == 'NP' or tags[0][1] == 'NV' or tags[0][1] == 'NST':
-                for suff in test_list[:]:
+                for suff in suffix_list[:]: #check suffix for noun words
                     for w in words:
                         if (w == word):
                             return word
                     if word.endswith(suff):
                         word = rchop(word, suff)
-            if tags[0][1] == 'VM' or tags[0][1] == 'VA':
-                for k in range(0, len(inflected)):
-                    if (word == inflected[i]):
+            if tags[0][1] == 'VM' or tags[0][1] == 'VA': #checking the map for verbal inflections
+                for k in range(0, len(inflected_verbal)):
+                    if (word == inflected_verbal[i]):
                         return verb[i]
 
-        A=getcandidates(word)
-        n = len(A)
+        candidate_keys=getcandidates(word)
+        n = len(candidate_keys)
         dist = []
-        string1 = word
+        input_word = word
         for i in range(0, n):
-            string2 = A[i][0]
-            d = lev(string1, string2)
-            dist.append([A[i][0], d])
+            candidate_key = candidate_keys[i][0]
+            d = levenshteinDistance(input_word, candidate_key)
+            dist.append([candidate_keys[i][0], d])
         distance = 9999999
-        root = []
+        root = [] #For storing list of root words
 
         for i in range(0, n):
             if dist[i][1] < distance:
                 distance = dist[i][1]
                 root = dist[i][0]
-        length = len(string1)
+        length = len(input_word)
         if distance > length / 2:
-            root = string1
+            root = input_word
         return root
 
 
@@ -300,5 +318,10 @@ for i in range(0, len(dids)):
 #    pickle.dump(myDict,handle,protocol=pickle.HIGHEST_PROTOCOL)
 filename = 'Dictionary.pickle'
 outfile = open(filename,'wb')
-pickle.dump(myDict1,outfile)
+pickle.dump(Word_root_map,outfile)
 outfile.close()
+
+filename1 = 'reverse_lem.pickle'
+outfile1 = open(filename1,'wb')
+pickle.dump(reverse_lem,outfile1)
+outfile1.close()
